@@ -1,0 +1,328 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template deploys a Cloudformation stack for creating an Bastion EC2 instance for the Data Initiative workload
+Parameters:
+  Environment: 
+    Description: The environment we are deploying to
+    Type: String
+    AllowedPattern: '[a-z][A-Za-z0-9]*'
+    ConstraintDescription: Must start with lowercase letter and follow CamelCase format after.
+    Default: test
+  Workload: 
+    Description: The workload for this application
+    Type: String
+    Default: etl
+    AllowedPattern: '[a-z][A-Za-z0-9]*'
+    ConstraintDescription: Must start with lowercase letter and follow CamelCase format after.    
+  Version:
+    Description: The version of the script
+    Type: String
+
+
+  BastionAMIOS:
+    AllowedValues:
+      - Windows-HVM
+   
+    Default: Windows-HVM
+    Description: The Windows distribution for the AMI to be used for the bastion instances.
+    Type: String
+
+  BastionInstanceType:
+    AllowedValues:
+      - t2.nano
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - t2.xlarge
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - t3.2xlarge
+      - m4.large
+      - m4.xlarge
+      - m4.2xlarge
+      - m4.4xlarge
+    Default: t2.medium
+    Description: Amazon EC2 instance type for the bastion instances.
+    Type: String
+
+  SubnetId:
+    Type: String
+    Description: 'Id of the subnet to place the etl EC2 Bastion instance'
+    Default: 'subnet-0d4d232067654eea0'
+
+  KeyPairName:
+    Description: Name of an existing public/private key pair. If you do not have one in this AWS Region,
+      please create it before continuing.
+    Type: 'AWS::EC2::KeyPair::KeyName'
+
+  RemoteAccessCIDR:
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+    ConstraintDescription: CIDR block parameter must be in the form x.x.x.x/x
+    Description: Allowed CIDR block for external SSH access to the bastions.
+    Type: String
+    Default: '10.172.0.0/16'
+  
+  VPCID:
+    Description: 'ID of the VPC (e.g., vpc-0343606e).'
+    Type: 'AWS::EC2::VPC::Id'
+
+  BastionInstance:
+    Description: 'Tag: Name of the ETL Bastion instance'
+    Type: String
+    Default: 'etl-test-win-bastion'
+
+  AppVolumeSize:
+    Description: The size in GB for the root EBS volume.
+    Type: Number
+    Default: '100'
+Rules:
+  SubnetsInVPC:
+    Assertions:
+      - Assert:
+          'Fn::EachMemberIn':
+            - 'Fn::ValueOfAll':
+                - 'AWS::EC2::Subnet::Id'
+                - VpcId
+            - 'Fn::RefAll': 'AWS::EC2::VPC::Id'
+        AssertDescription: All subnets must exist in the VPC
+Mappings:
+  AWSAMIRegionMap:
+    us-west-2:
+      WindowsHVM: ami-0c1f1af738a48f657
+
+
+  WindowsAMINameMap:
+    Windows-HVM:
+      Code: WindowsHVM
+      OS: Windows
+     
+
+Resources:
+  BastionMainLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+
+  SSHMetricFilter:
+    Type: 'AWS::Logs::MetricFilter'
+    Properties:
+      LogGroupName: !Ref BastionMainLogGroup
+      FilterPattern: ON FROM USER PWD
+      MetricTransformations:
+        - MetricName: SSHCommandCount
+          MetricValue: '1'
+          MetricNamespace: !Sub "AWSQuickStart/${AWS::StackName}"
+
+  BastionHostRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: /
+      RoleName: !Sub ${Workload}-${Environment}-win-bastion-role
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+                - rds.amazonaws.com
+                - s3.amazonaws.com
+                - dms.amazonaws.com
+                - glue.amazonaws.com
+            Effect: Allow
+        Version: 2012-10-17
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/CloudWatchAgentServerPolicy'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonRDSFullAccess'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonEC2FullAccess'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/AmazonS3FullAccess'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/CloudWatchLogsFullAccess'
+      Tags:    
+        - Key: Name
+          Value: !Sub ${Workload}-${Environment}-win-bastion-role
+        - Key: Workload
+          Value: !Ref Workload
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Version
+          Value: !Ref Version
+
+  BastionHostPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub ${Workload}-${Environment}-win-bastion-policy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'logs:CreateLogStream'
+              - 'logs:GetLogEvents'
+              - 'logs:PutLogEvents'
+              - 'logs:DescribeLogGroups'
+              - 'logs:DescribeLogStreams'
+              - 'logs:PutRetentionPolicy'
+              - 'logs:PutMetricFilter'
+              - 'logs:CreateLogGroup'
+            Resource: "*"
+            Effect: Allow
+      Roles:
+          - !Ref BastionHostRole
+
+  BastionHostProfile:
+    DependsOn: BastionHostPolicy
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles:
+        - !Ref BastionHostRole
+      Path: /
+  EIP:
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: vpc
+
+  BastionSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Enables SSH Access to Bastion Hosts
+      VpcId: !Ref VPCID
+      Tags:    
+        - Key: Name
+          Value: !Sub ${Workload}-${Environment}-win-bastion-sg
+        - Key: Workload
+          Value: !Ref Workload
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Version
+          Value: !Ref Version
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref RemoteAccessCIDR
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: !Ref RemoteAccessCIDR
+
+  BastionIngress1:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: 'App ports'
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId:
+        Fn::GetAtt:
+        - BastionSecurityGroup
+        - GroupId
+      GroupId:
+        Fn::GetAtt:
+        - BastionSecurityGroup
+        - GroupId
+
+  BastionIngress2:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: 'ping'
+      IpProtocol: icmp
+      FromPort: -1
+      ToPort: -1
+      SourceSecurityGroupId:
+        Fn::GetAtt:
+        - BastionSecurityGroup
+        - GroupId
+      GroupId:
+        Fn::GetAtt:
+        - BastionSecurityGroup
+        - GroupId
+
+  BastionIngress3:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: 'DB listener ports'
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      CidrIp: !Ref RemoteAccessCIDR
+      GroupId:
+        Fn::GetAtt:
+        - BastionSecurityGroup
+        - GroupId
+
+  BastionIngress4:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: 'Barracuda VPN Users'
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: 10.1.2.0/24
+      GroupId:
+        Fn::GetAtt:
+        - BastionSecurityGroup
+        - GroupId
+  BastionIngress5:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: 'RDP Users'
+      IpProtocol: tcp
+      FromPort: 3389
+      ToPort: 3389
+      CidrIp: 0.0.0.0/0
+      GroupId:
+        Fn::GetAtt:
+        - BastionSecurityGroup
+        - GroupId
+  BastionEC2Instance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      ImageId: !FindInMap 
+        - AWSAMIRegionMap
+        - !Ref 'AWS::Region'
+        - !FindInMap 
+          - WindowsAMINameMap
+          - !Ref BastionAMIOS
+          - Code
+      KeyName: !Ref KeyPairName
+      InstanceType: !Ref BastionInstanceType
+      Monitoring: true
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: false
+          DeleteOnTermination: true
+          DeviceIndex: '0'
+          SubnetId: !Ref SubnetId
+          GroupSet:
+            - !Ref BastionSecurityGroup
+
+      Tags:    
+        - Key: Name
+          Value: !Ref BastionInstance
+        - Key: Workload
+          Value: !Ref Workload
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Version
+          Value: !Ref Version            
+
+
+Outputs:
+  EIP:
+    Description: Elastic IP for Bastion
+    Value: !Ref EIP
+    Export:
+      Name: !Sub '${AWS::StackName}-EIP'
+  CloudWatchLogs:
+    Description: CloudWatch Logs GroupName. Your SSH logs will be stored here.
+    Value: !Ref BastionMainLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudWatchLogs'
+  BastionSecurityGroupID:
+    Description: Bastion Security Group ID
+    Value: !Ref BastionSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-BastionSecurityGroup'
+

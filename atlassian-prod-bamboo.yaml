@@ -1,0 +1,621 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates two EC2 instances for the testing out the Bamboo cluster build in the dev environment 
+
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Generic Parameters
+        Parameters:
+          - VpcId
+          - KeyPairName
+          - AppLinuxInstanceType
+          - SSHCidr
+          - QSS3BucketName
+      - Label:
+          default: App Instance Details
+        Parameters:
+          - App1EC2InstanceName
+          - App1SubnetId
+          - App2EC2InstanceName
+          - App2SubnetId
+          - AppVolumeSize
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: 'Id of the VPC'
+  App1SubnetId:
+    Type: String
+    Description: 'Id of the subnet to place the App1 Instance'
+    Default: 'subnet-0a846b0c05ea79ff7'
+  App2SubnetId:
+    Type: String
+    Description: 'Id of the subnet to place the App2 Instance'
+    Default: 'subnet-06abac66aba89a463'
+  Environment:
+    Description: 'Environment (development, test, or production)'
+    Type: String
+    Default: tools
+  Workload:
+    Description: Workload
+    Type: String
+    Default: atlassian
+  SSHCidr:
+    Type: String
+    Description: 'CIDR Block to allow SSH Access'
+    Default: '10.190.0.0/20'
+  App1EC2InstanceName:
+    Description: 'Tag: Name of the App1 Instance'
+    Type: String
+    Default: 'atlassian-prod-bamboo1'
+  App2EC2InstanceName:
+    Description: 'Tag: Name of the App2 Instance'
+    Type: String
+    Default: 'atlassian-prod-bamboo2'
+  KeyPairName:
+    Description: 'Name of an existing EC2 KeyPair to enable SSH access to the instances'
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    Default: 'atlassian-keypair'
+  AppLinuxInstanceType:
+    Type: String
+    Default: t2.xlarge
+    AllowedValues:
+      - t2.nano
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - t2.xlarge
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - t3.2xlarge
+      - c5.xlarge
+      - m4.large
+      - m4.xlarge
+      - m4.2xlarge
+      - m4.4xlarge
+      - m4.10xlarge
+      - c4.large
+      - c4.xlarge
+      - c4.2xlarge
+      - c4.4xlarge
+      - c4.8xlarge
+      - r3.large
+      - r3.xlarge
+      - r3.2xlarge
+      - r3.4xlarge
+      - r3.8xlarge
+    Description: 'Instance Type'
+    ConstraintDescription: Must contain valid instance type
+  AppVolumeSize:
+    Description: 'Size (GB) of App EBS Volume'
+    Type: String
+    Default: '200'
+  QSS3BucketName:
+    Type: String
+    Description: 'Common binaries and scripts bucket'
+    Default: 'cmips-dev-security.332206189751.staging-s3'
+
+#   -----------
+#   Mappings
+#   -----------
+
+Mappings:
+  AWSInstanceType2Arch:
+    t2.nano:
+      Arch: HVM64
+    t2.micro:
+      Arch: HVM64
+    t2.small:
+      Arch: HVM64
+    t2.medium:
+      Arch: HVM64
+    t2.large:
+      Arch: HVM64
+    t2.xlarge:
+      Arch: HVM64
+    t3.micro:
+      Arch: HVM64
+    t3.small:
+      Arch: HVM64
+    t3.medium:
+      Arch: HVM64
+    t3.large:
+      Arch: HVM64
+    t3.xlarge:
+      Arch: HVM64
+    t3.2xlarge:
+      Arch: HVM64
+    c5.xlarge:
+      Arch: HVM64
+    m4.large:
+      Arch: HVM64
+    m4.xlarge:
+      Arch: HVM64
+    m4.2xlarge:
+      Arch: HVM64
+    m4.4xlarge:
+      Arch: HVM64
+    m4.10xlarge:
+      Arch: HVM64
+    c4.large:
+      Arch: HVM64
+    c4.xlarge:
+      Arch: HVM64
+    c4.2xlarge:
+      Arch: HVM64
+    c4.4xlarge:
+      Arch: HVM64
+    c4.8xlarge:
+      Arch: HVM64
+    r3.large:
+      Arch: HVM64
+    r3.xlarge:
+      Arch: HVM64
+    r3.2xlarge:
+      Arch: HVM64
+    r3.4xlarge:
+      Arch: HVM64
+    r3.8xlarge:
+      Arch: HVM64
+
+  AWSRegionArch2AMI:
+    us-east-1:
+      HVM64: ami-7dce6507
+    us-east-2:
+      HVM64: ami-43391926
+    us-west-2:
+      #HVM64: ami-3408c34c
+      HVM64: ami-08d523a384a278937
+    us-west-1:
+      HVM64: ami-9c447bfc
+Resources:
+
+  InstancePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Action:
+          - "s3:PutObject"
+          - "s3:GetObject"
+          Effect: Allow    
+          Resource: 
+            Fn::Join: 
+            - ""
+            - 
+              - "arn:aws:s3:::"
+              - !Ref QSS3BucketName
+              - "/*"
+        - Action:
+          - "s3:ListBucket"
+          Effect: Allow      
+          Resource:  
+            Fn::Join: 
+            - ""
+            - 
+              - "arn:aws:s3:::"
+              - !Ref QSS3BucketName
+      Roles:
+      - Ref: InstanceRole
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+          - "arn:aws:iam::aws:policy/AmazonSSMRoleForInstancesQuickSetup"
+
+  InstanceRoleProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+      - Ref: InstanceRole
+
+  AppSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Atlassian Security Group'
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ Workload}-${Environment}-app-sg
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Workload
+          Value: !Ref  Workload          
+
+  AppIngress1:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: 'App listener ports'
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8090
+      SourceSecurityGroupId:
+        Fn::GetAtt:
+        - AppSecurityGroup
+        - GroupId
+      GroupId:
+        Fn::GetAtt:
+        - AppSecurityGroup
+        - GroupId
+
+  AppIngress2:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: 'ping'
+      IpProtocol: icmp
+      FromPort: -1
+      ToPort: -1
+      SourceSecurityGroupId:
+        Fn::GetAtt:
+        - AppSecurityGroup
+        - GroupId
+      GroupId:
+        Fn::GetAtt:
+        - AppSecurityGroup
+        - GroupId
+
+  AppIngress3:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      Description: 'SSH Access'
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref SSHCidr
+      GroupId:
+        Fn::GetAtt:
+        - AppSecurityGroup
+        - GroupId
+
+#   ------------------
+#   App Node 1
+#   ------------------
+  app1PrimaryServerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub ${Workload}-${VpcId}-app1-ec2
+      RetentionInDays: 14
+  app1Primary:
+    Type: 'AWS::EC2::Instance'     
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+          - I1022
+      AWS::CloudFormation::Authentication:
+        S3AccessCreds:
+          type: S3
+          roleName: !Ref 'InstanceRole'
+          buckets: [!Ref QSS3BucketName]
+      AWS::CloudFormation::Init:
+        configSets:
+          cmips_postinstall:
+            - install_cfn
+            - install_cloudwatch_agent 
+            - install_security_tools         
+        install_cfn:
+          files:
+            "/etc/cfn/cfn-hup.conf":
+              content: !Sub | 
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+                verbose=true
+              mode: '000400'
+              owner: root
+              group: root
+            "/etc/cfn/hooks.d/cfn-auto-reloader.conf":
+              content: !Sub | 
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.app1Primary.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource app1Primary --configsets cmips_postinstall --region ${AWS::Region}
+                runas=root
+              mode: '000400'
+              owner: root
+              group: root
+            "/lib/systemd/system/cfn-hup.service" :
+              content: !Sub |
+                [Unit]
+                Description=cfn-hup daemon
+                [Service]
+                Type=simple
+                ExecStart=/opt/aws/bin/cfn-hup
+                Restart=always
+                [Install]
+                WantedBy=multi-user.target
+          commands :
+            01_enable_cfn_hup :
+              command: "systemctl enable cfn-hup.service"
+            02_start_cfn_hup:
+              command: "systemctl start cfn-hup.service"
+                
+        install_cloudwatch_agent:       
+          files:
+            "/opt/cwlogs/config.json":
+              content: !Sub |
+                  {
+                          "agent": {
+                                  "run_as_user": "root"
+                          },
+                          "logs": {
+                                  "logs_collected": {
+                                          "files": {
+                                                  "collect_list": [
+                                                          {
+                                                                  "file_path": "/var/log/cfn-init.log",
+                                                                  "log_group_name": "${app1PrimaryServerLogGroup}",
+                                                                  "log_stream_name": "{instance_id}/cfn-init.log",
+                                                                  "timestamp_format": "d/%b/%Y:%H:%M:%S"
+                                                          }
+                                                        
+                                                  ]
+                                          }
+                                  }
+                          }
+                  }             
+              mode: '000400'
+              owner: root
+              group: root         
+          commands:
+            01_wget:
+              command: "wget https://s3.amazonaws.com/amazoncloudwatch-agent/redhat/amd64/latest/amazon-cloudwatch-agent.rpm"
+              cwd: "/root"
+            02_install_rpm: 
+              command: "rpm -U ./amazon-cloudwatch-agent.rpm"
+              cwd: "/root"
+            03_configure:
+              command: "cp /opt/cwlogs/config.json /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json"
+            04_enable:
+              command: "systemctl enable amazon-cloudwatch-agent.service"
+              cwd: "/root"
+            05_restart:
+              command: "systemctl restart amazon-cloudwatch-agent.service"
+              cwd: "/root"
+        install_security_tools:
+          files:
+            /opt/rapid7/scripts/rapid7_accounts.sh:
+              content: |
+                #!/bin/bash
+                echo "Adding users and groups"
+                groupadd -g 8001 cmips2
+                groupadd -g 8002 rapid7.admin
+                useradd --uid 8010 --no-user-group --gid rapid7.admin --groups cmips2 --home-dir '/home/rapid7.admin' --comment "Rapid7 Admin user" rapid7.admin
+                usermod -a -G cmips2 rapid7.admin
+                echo "Adding users and groups completed"
+                
+                mkdir -p /home/rapid7.admin/.ssh
+                mkdir -p /home/ec2-user/.ssh
+                echo "ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQBcQlIPrGF78lAFrqY+5+1hx0yF32MVXUaUdrmuv8w8ahhbD8JCHSayYvZJFi2hSz34HwyiP/bHAN/TmnPchzJoQlfL3Z4d7VY1y+9qkeJeAxL5mJ8Y0/oc6+dujqy6ItvvUbEran6vZTdARvDCVm9e+ksJYE5mJ52Jwajdz/8uFhL4vqQpPnHfK/Yi2oDdHEd03z52ynHgYqV85lyRlSPDvocfiZXBDTL+UaiFQHgpXcMjBFsST0aKY/Dhd8OZnvH2M+KoIDANxZsGXEyyaRJI4+F9xjZKI1h4edtkUY1jFsLXHhvNiWw8YDeOc8iI0q6D2tM3bnKBn4uBAjI9Cnov CMIPS AWS Linux" >> /home/rapid7.admin/.ssh/authorized_keys
+                echo "ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEAlpn4WTiErJwrog8WppbbY9bcXDMCk1xeeWV9nN6fLXqGoqXYUR97H3zp5wziX/VKox6Y7KVC14xjhDaLC36cfjCyzGUTm1DtfHkfkPzNpiRk5uKbK1p6L3gaQ51Oud4QiPEz8bO0XLaUn96qnR8tlPXPFKhEgHF5Mt4IZMuJ5mrc3gTBOktZIdiQcFPHT2O75wBDjJoP+y+P6jVCKjAG1w8A4mqK3Cpd+KEmLfZopUOOoXHSmqkFpHC9EQdyEYaOoanP2Bsca4Nesq77EyrGfj0XWFguV5m6hpk4mRtOxI7Lqbsw743wGJEwoAcp8t4d0ocCchmn25fEFSZe5ziVhw== rsa-key-20210414" >> /home/ec2-user/.ssh/authorized_keys
+                echo "ssh-rsa AAAAB3NzaC1yc2EAAAABJQAAAQEArDquJKQJ2p835Bw+mhM0OhKjXDLfuwVIkPSgMNlM7yhVR4N4AYuAOWaEC99g8IqqsMOAZRjJ7+Q/Hdbyx/jvXqHusQbflbcH8Iw4846+aYkWVLRKxlNo3rB5SWIySrQlPRLIlKZhYgfMcugedRsj4H6AaoKlHkSy7stbzrXOgllLOEB9E6oa4VWz+Jh/Cb+6zU8kBd/AZ7nH0h9KPSHWX33SXVoRKDo435F0yI38X7idOuZwy0zZym0oFd/w56XsDh9ewdSBy7u2DlyfCxjys6H8QBzhblIA1o1U6GH9bRSUGNHxOYe2h3CPw4rLiexmrjrD4acw8A6Wjx3bBbDFkw== rsa-key-20210511" >> /home/ec2-user/.ssh/authorized_keys
+                chmod 600 /home/rapid7.admin/.ssh/authorized_keys
+                chmod 600 /home/ec2-user/.ssh/authorized_keys
+                chown -R rapid7.admin:rapid7.admin /home/rapid7.admin/.ssh/
+                chown -R ec2-user:ec2-user /home/ec2-user/.ssh/
+                cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.bck.orig
+                sed -i 's/AllowUsers ec2-user/AllowUsers ec2-user rapid7.admin/' /etc/ssh/sshd_config
+                service sshd restart
+                echo "Adding rapid7 keys completed"
+                yum install -y wget unzip
+                echo "Adding directories completed"
+                echo "Adding sudo entries for rapid7"
+                echo "# User rules for rapid7.admin" >> /etc/sudoers.d/rapid7
+                echo "rapid7.admin ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/rapid7
+                echo "Script completed"
+
+              encoding: plain
+              mode: '000755'
+              owner: root
+              group: root
+          sources :
+             /opt/rapid7: !Sub https://s3-us-west-2.amazonaws.com/${QSS3BucketName}/Linux_Agent.zip       
+          commands:
+            01_chmod_files:
+              cwd: "/opt/rapid7"
+              command: "chmod -R 755 /opt/rapid7"
+              ignoreErrors: "true"
+            02_execute_script:
+              cwd: "/opt/rapid7"
+              command: "/opt/rapid7/scripts/rapid7_accounts.sh"
+              ignoreErrors: "true"
+            03_dostouninx:
+              cwd: "/opt/rapid7"
+              command: "yum install -y dos2unix"
+            04_dostouninx_file:
+              cwd: "/opt/rapid7"
+              command: "dos2unix /opt/rapid7/Linux_Agent/install.sh"
+              ignoreErrors: "true"
+            05_install_rapid7:
+              cwd: "/opt/rapid7/Linux_Agent"
+              command: "./install.sh"
+              ignoreErrors: "true"        
+    Properties:
+      Monitoring: true 
+      ImageId: !FindInMap 
+        - AWSRegionArch2AMI
+        - !Ref 'AWS::Region'
+        - !FindInMap 
+          - AWSInstanceType2Arch
+          - !Ref AppLinuxInstanceType
+          - Arch
+      KeyName: !Ref KeyPairName
+      InstanceType: !Ref AppLinuxInstanceType
+      Monitoring: true
+      IamInstanceProfile: !Ref InstanceRoleProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: false
+          DeleteOnTermination: true
+          DeviceIndex: 0
+          SubnetId: !Ref App1SubnetId
+          GroupSet:
+            - !Ref AppSecurityGroup
+      BlockDeviceMappings:
+# / filesystem
+        - DeviceName: /dev/xvdg
+          Ebs:
+            VolumeSize: !Ref AppVolumeSize
+            DeleteOnTermination: true
+            Encrypted: 'true'
+      Tags:
+        - Key: Name
+          Value: !Ref App1EC2InstanceName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Workload
+          Value: !Ref  Workload 
+
+      UserData: !Base64 
+        'Fn::Join':
+          - ''
+          - - |
+              #!/bin/bash -xe
+            - |
+              # StackName
+            - 'STACKNAME='
+            - !Ref 'AWS::StackName'
+            - |+
+
+            - |
+              # Region
+            - 'AWSREGION='
+            - !Ref 'AWS::Region'
+            - |+
+
+              echo "vm.swappiness=5" >> /etc/sysctl.conf
+              yum -y update >> /var/log/cfn-init.log 2>&1
+            - |
+              echo "Shutting down iptables" >> /var/log/cfn-init.log 2>&1
+            - |
+              service iptables stop >> /var/log/cfn-init.log 2>&1
+            - |
+              yum install -y libc.so libaio.so libstdc++.so.6 libpam.so libaio-dev pam.1686 libaio compat-libstdc++-33.i686 kernel-devel gcc-c++ cpp gcc binutils sg3_utils sg_persist python35-python-pip ksh unzip libaio.i686 pam.i686>> /var/log/cfn-init.log 2>&1
+            - |
+              echo "Installing app1 pre-requisites completed" >> /var/log/cfn-init.log 2>&1
+            - |
+              echo "Installing pip" >> /var/log/cfn-init.log 2>&1
+            - |
+              yum -y install unzip system-storage-manager >> /var/log/cfn-init.log 2>&1
+            - |
+              echo "#################" >> /var/log/cfn-init.log 2>&1
+
+            - |
+              PRINAME=$HOSTNAME
+              hostnamectl set-hostname cmips-atlassian-dev-bamboo1
+              yum install -y python-setuptools
+              yum install -y nvme-cli
+              yum -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+              yum -y install  python-daemon
+              setenforce 0
+              mkdir -p /opt/aws/bin
+              mkdir -p /opt/aws/aws-cfn-bootstrap
+              cd /opt/aws/aws-cfn-bootstrap
+              wget https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+              tar xvf aws-cfn-bootstrap-latest.tar.gz
+              cd aws-cfn-bootstrap-*/
+              python2 setup.py build
+              python2 setup.py install
+              ln -s /usr/init/redhat/cfn-hup /etc/init.d/cfn-hup
+              chmod 775 /usr/init/redhat/cfn-hup
+              ln -s /usr/bin/cfn-hup /opt/aws/bin/cfn-hup
+              ln -s /usr/bin/cfn-signal /opt/aws/bin/cfn-signal
+              ln -s /usr/bin/cfn-init /opt/aws/bin/cfn-init
+              ln -s /usr/bin/cfn-get-metadata /opt/aws/bin/cfn-get-metadata
+              ln -s /usr/bin/cfn-send-cmd-event /opt/aws/bin/cfn-send-cmd-event
+              ln -s /usr/bin/cfn-send-cmd-result /opt/aws/bin/cfn-send-cmd-result
+              ls -lh /opt/aws/bin/
+              echo "cfn bootstrap installation-completed" >> /var/log/cfn-init.log 2>&1
+
+            - '/opt/aws/bin/cfn-init -v '
+            - '         --stack '
+            - !Ref 'AWS::StackName'
+            - '         --resource app1Primary '
+            - '         --configsets cmips_postinstall '
+            - '         --region '
+            - !Ref 'AWS::Region'
+            - |+
+
+            - |
+              echo "Signal the status from cfn-init" >> /var/log/cfn-init.log 2>&1
+              # Signal the status from cfn-init
+            - '/opt/aws/bin/cfn-signal -e $? '
+            - '         --stack '
+            - !Ref 'AWS::StackName'
+            - '         --resource app1Primary '
+            - '         --region '
+            - !Ref 'AWS::Region'
+            - |+
+              echo "Post-installation-completed" >> /var/log/cfn-init.log 2>&1
+              echo "#########################" >> /var/log/cfn-init.log 2>&1
+              echo "Rebooting Server" >> /var/log/cfn-init.log 2>&1
+              
+              ###################
+
+    # Install the postgres tools on the bitbucket test server
+            mkdir /opt/postgres
+            cd /opt/postgres
+            yum install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-7-x86_64/pgdg-redhat-repo-latest.noarch.rpm --nogpgcheck
+            yum clean all
+            yum repolist -y
+            yum -y install postgresql14 postgresql14-server
+
+# Configure the database
+            psql --host=cmips-dev-jfrog-db-stack-auroradbcluster.cluster-cwnvfoa6pvjf.us-west-2.rds.amazonaws.com --port=5432 --username=postgres --dbname=postgres
+
+# Create a new database - bamboodb 
+            CREATE USER bamboo WITH PASSWORD 'bamboo123';
+            GRANT bamboo TO postgres;
+            CREATE DATABASE bamboodb WITH OWNER=bamboo ENCODING='UTF8';
+            GRANT ALL PRIVILEGES ON DATABASE bamboodb to bamboo;
+
+
+
+#####################
+
+            yum install -y java-1.8.0-openjdk
+            chown -R bamboo:bamboo /opt/atlassian/
+# Set the bamboo home directory - /opt/atlassian/application-data/bamboo
+            cp -p /opt/atlassian/bamboo/atlassian-bamboo-8.2.6/atlassian-bamboo/WEB-INF/classes/bamboo-init.properties /opt/atlassian/bamboo/atlassian-bamboo-8.2.6/atlassian-bamboo/WEB-INF/classes/bamboo-init.properties.bckup
+            echo "bamboo.home= /opt/atlassian/application-data/bamboo" >> /opt/atlassian/bamboo/atlassian-bamboo-8.2.6/atlassian-bamboo/WEB-INF/classes/bamboo-init.properties
+            echo "JAVA_HOME=/etc/alternatives/java" >> /etc/environment
+            . /etc/environment
+            export JAVA_HOME
+
+######################
+
+            su - bamboo
+            /opt/atlassian/bamboo/atlassian-bamboo-8.2.6/bin/start-bamboo.sh
+
+#####################
+
+            [bamboo@ip-10-132-14-19 bin]$ pwd
+            /opt/atlassian/bamboo/atlassian-bamboo-8.2.6/bin
+            [bamboo@ip-10-132-14-19 bin]$ start-bamboo.sh
+            [bamboo@ip-10-132-14-19 bin]$ /opt/atlassian/bamboo/atlassian-bamboo-8.2.6/bin/start-bamboo.sh
+
+            To run Bamboo in the foreground, start the server with start-bamboo.sh -fg
+
+            Server startup logs are located in /opt/atlassian/bamboo/atlassian-bamboo-8.2.6/logs/catalina.out
+              reboot
+
+
